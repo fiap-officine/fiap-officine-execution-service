@@ -1,0 +1,2 @@
+# Scripts montados em containers Linux precisam de LF mesmo em clones no Windows
+*.sh text eol=lf
