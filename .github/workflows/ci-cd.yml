@@ -1,0 +1,123 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SERVICE: execution-service
+  ECR_REPOSITORY: fiap-officine-execution-service
+  AWS_REGION: sa-east-1
+  NAMESPACE: officine
+
+jobs:
+  # ── 1. Lint + testes (unit, integração, BDD) com cobertura mínima de 80% ──
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Testes + cobertura (gate 80%)
+        run: uv run pytest --cov-fail-under=80
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  # ── 2. SonarCloud + Quality Gate (check obrigatório no PR) ──
+  quality:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+
+  # ── 3. Build e push da imagem no ECR (tag = SHA do commit) ──
+  build-push:
+    if: github.event_name == 'push'
+    needs: quality
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - id: meta
+        run: echo "image=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Build & push
+        run: |
+          docker build -t "${{ steps.meta.outputs.image }}" .
+          docker push "${{ steps.meta.outputs.image }}"
+
+  # ── 4. Deploy no Kubernetes (develop -> homolog, main -> production) ──
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+    env:
+      OVERLAY: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+      IMAGE: ${{ needs.build-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - uses: imranismail/setup-kustomize@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Kubeconfig
+        env:
+          KUBE_CONFIG_RAW: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: pip install pyyaml >/dev/null && python scripts/setup_kubeconfig.py
+
+      - name: Segredos (gerados a partir de GitHub Secrets; nunca versionados)
+        env:
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          kubectl apply -f k8s/base/namespace.yaml
+          kubectl -n "$NAMESPACE" create secret generic execution-service-secrets             --from-literal=JWT_SECRET_KEY="$JWT_SECRET_KEY"             --dry-run=client -o yaml | kubectl apply -f -
+          if [ -n "$NEW_RELIC_LICENSE_KEY" ]; then
+            kubectl -n "$NAMESPACE" create secret generic newrelic-secret               --from-literal=license_key="$NEW_RELIC_LICENSE_KEY"               --dry-run=client -o yaml | kubectl apply -f -
+          fi
+
+      - name: Deploy (Kustomize) + rollout
+        run: |
+          cd "k8s/overlays/$OVERLAY"
+          kustomize edit set image "execution-service=$IMAGE"
+          kustomize build . | kubectl apply -f -
+          kubectl -n "$NAMESPACE" rollout status deployment/execution-service --timeout=240s
+
+      - name: Smoke test
+        run: |
+          kubectl -n "$NAMESPACE" run smoke-execution-${GITHUB_RUN_ID} --rm -i --restart=Never \
+            --image=curlimages/curl:8.10.1 -- \
+            curl -fsS --retry 5 --retry-delay 3 http://execution-service:8000/execution/health

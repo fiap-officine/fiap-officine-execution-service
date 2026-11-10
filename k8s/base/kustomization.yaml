@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: officine
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - ingress.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fiap-officine
+    includeSelectors: false
+
+# Valores não sensíveis. Segredos (execution-service-secrets) são criados no pipeline
+# a partir de GitHub Secrets e nunca versionados.
+configMapGenerator:
+  - name: execution-service-config
+    literals:
+      - SERVICE_NAME=execution-service
+      - NEW_RELIC_APP_NAME=officine-execution-service
+      - NEW_RELIC_DISTRIBUTED_TRACING_ENABLED=true
+      - DYNAMODB_CREATE_TABLES=false
+      - AWS_REGION=sa-east-1
+      - RUN_WORKERS=true
+      - LOG_LEVEL=INFO
+      - JWT_ALGORITHM=HS256
+
+images:
+  - name: execution-service
+    newName: execution-service
+    newTag: latest

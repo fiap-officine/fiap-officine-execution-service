@@ -1,0 +1,41 @@
+name: Infra (Terraform)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  push:
+    branches: [main, develop]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+
+env:
+  TF_SERVICE: execution-service
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      ENVIRONMENT: ${{ (github.base_ref || github.ref_name) == 'main' && 'production' || 'homolog' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: sa-east-1
+
+      - run: terraform fmt -check -recursive
+      - run: terraform init -input=false -backend-config="key=${TF_SERVICE}/${ENVIRONMENT}/terraform.tfstate"
+      - run: terraform validate
+      - name: Plan
+        run: terraform plan -input=false -var-file="env/${ENVIRONMENT}.tfvars" -var="node_role_name=${{ vars.K3S_NODE_ROLE_NAME }}" -out=tfplan
+      - name: Apply
+        if: github.event_name == 'push'
+        run: terraform apply -input=false -auto-approve tfplan
