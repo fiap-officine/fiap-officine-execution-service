@@ -1,0 +1,55 @@
+[project]
+name = "fiap-officine-execution-service"
+version = "1.0.0"
+description = "Execution Service: estoque, fila de execução, diagnóstico e reparo (DynamoDB) — Tech Challenge SOAT Fase 4"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.35",
+    "fastapi>=0.136.1",
+    "newrelic>=13.5,<14",
+    "pydantic-settings>=2.14.0",
+    "pydantic>=2.13.3",
+    "python-jose>=3.5.0",
+    "uvicorn>=0.46.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "moto[sqs,dynamodb]>=5.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --tb=short -p no:cacheprovider --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=80"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008", "UP017", "UP042", "UP046"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

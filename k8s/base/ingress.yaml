@@ -1,0 +1,14 @@
+# Roteamento por path no Traefik: rotas do Execution Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: execution-service
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - http:
+        paths:
+          - { path: /api/v1/execucoes, pathType: Prefix, backend: { service: { name: execution-service, port: { number: 8000 } } } }
+          - { path: /api/v1/estoque, pathType: Prefix, backend: { service: { name: execution-service, port: { number: 8000 } } } }
+          - { path: /execution, pathType: Prefix, backend: { service: { name: execution-service, port: { number: 8000 } } } }

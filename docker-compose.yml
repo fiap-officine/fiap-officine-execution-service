@@ -1,0 +1,35 @@
+# Ambiente local do Execution Service: LocalStack (DynamoDB + SQS).
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: sqs,dynamodb
+      AWS_DEFAULT_REGION: sa-east-1
+      SQS_QUEUE_PREFIX: fiap-officine
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name fiap-officine-execution-commands --region sa-east-1"]
+      interval: 5s
+      retries: 20
+
+  execution-service:
+    build: .
+    ports:
+      - "8002:8000"
+    environment:
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: sa-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_QUEUE_PREFIX: fiap-officine
+      DYNAMODB_TABLE_PREFIX: fiap-officine
+      DYNAMODB_CREATE_TABLES: "true"
+      RUN_WORKERS: "true"
+      APP_ENV: development
+      JWT_SECRET_KEY: dev-secret-compartilhado-entre-servicos
+    depends_on:
+      localstack:
+        condition: service_healthy
