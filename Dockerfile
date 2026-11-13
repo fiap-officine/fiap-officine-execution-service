@@ -17,7 +17,7 @@ RUN uv sync --frozen --no-dev
 # ── Stage 2: runtime (sem uv, sem toolchain) ─────
 FROM python:3.12-slim
 
-RUN groupadd -r appuser && useradd -r -g appuser -m appuser
+RUN groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser -m appuser
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -28,7 +28,8 @@ COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 COPY --chown=appuser:appuser app ./app
 COPY --chown=appuser:appuser newrelic.ini ./
 
-USER appuser
+# UID numérico: o Kubernetes só valida runAsNonRoot com usuário numérico
+USER 10001:10001
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
