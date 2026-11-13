@@ -78,13 +78,13 @@ jobs:
           docker build -t "${{ steps.meta.outputs.image }}" .
           docker push "${{ steps.meta.outputs.image }}"
 
-  # ── 4. Deploy no Kubernetes (develop -> homolog, main -> production) ──
+  # ── 4. Deploy no Kubernetes (ambiente único: homolog, para develop e main) ──
   deploy:
     needs: build-push
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+    environment: homolog
     env:
-      OVERLAY: ${{ github.ref == 'refs/heads/main' && 'production' || 'homolog' }}
+      OVERLAY: homolog
       IMAGE: ${{ needs.build-push.outputs.image }}
     steps:
       - uses: actions/checkout@v4
@@ -104,9 +104,13 @@ jobs:
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
         run: |
           kubectl apply -f k8s/base/namespace.yaml
-          kubectl -n "$NAMESPACE" create secret generic execution-service-secrets             --from-literal=JWT_SECRET_KEY="$JWT_SECRET_KEY"             --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "$NAMESPACE" create secret generic execution-service-secrets \
+            --from-literal=JWT_SECRET_KEY="$JWT_SECRET_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
           if [ -n "$NEW_RELIC_LICENSE_KEY" ]; then
-            kubectl -n "$NAMESPACE" create secret generic newrelic-secret               --from-literal=license_key="$NEW_RELIC_LICENSE_KEY"               --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n "$NAMESPACE" create secret generic newrelic-secret \
+              --from-literal=license_key="$NEW_RELIC_LICENSE_KEY" \
+              --dry-run=client -o yaml | kubectl apply -f -
           fi
 
       - name: Deploy (Kustomize) + rollout
@@ -118,6 +122,6 @@ jobs:
 
       - name: Smoke test
         run: |
-          kubectl -n "$NAMESPACE" run smoke-execution-${GITHUB_RUN_ID} --rm -i --restart=Never \
+          kubectl -n "$NAMESPACE" run "smoke-execution-${GITHUB_RUN_ID}" --rm -i --restart=Never \
             --image=curlimages/curl:8.10.1 -- \
             curl -fsS --retry 5 --retry-delay 3 http://execution-service:8000/execution/health
