@@ -32,6 +32,27 @@ def get_correlation_id() -> str | None:
     return correlation_id_ctx.get()
 
 
+# Campos de contexto copiados para todo LogRecord. Assim o encaminhamento de
+# logs do agente New Relic (application_logging.forwarding.context_data) os
+# envia como atributos pesquisáveis: context.saga_id, context.os_id, ...
+# Não passe esses nomes em `extra=`: eles já vêm do contexto.
+_CONTEXT_FIELDS = (
+    ("correlation_id", correlation_id_ctx),
+    ("saga_id", saga_id_ctx),
+    ("os_id", os_id_ctx),
+)
+_base_record_factory = logging.getLogRecordFactory()
+
+
+def _context_record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+    record = _base_record_factory(*args, **kwargs)
+    for name, ctx in _CONTEXT_FIELDS:
+        value = ctx.get()
+        if value is not None:
+            setattr(record, name, value)
+    return record
+
+
 class JSONLogFormatter(logging.Formatter):
     """
     Formatador de logs estruturados em JSON para envio ao New Relic e stdout.
@@ -94,6 +115,7 @@ def setup_json_logging(
     log_level: str = "INFO",
 ):
     """Configura o logger raiz para emitir logs estritamente em JSON no stdout."""
+    logging.setLogRecordFactory(_context_record_factory)
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
