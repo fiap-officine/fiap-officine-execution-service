@@ -147,6 +147,11 @@ jobs:
       - name: Deploy (Kustomize) + rollout
         run: |
           cd "k8s/overlays/$OVERLAY"
+          # Hash dos Secrets como anotação do pod: credencial nova reinicia os pods
+          # (as variáveis de ambiente vindas de Secret só são lidas na partida)
+          SECRETS_HASH=$(kubectl -n "$NAMESPACE" get secret execution-service-secrets newrelic-secret \
+            --ignore-not-found -o jsonpath='{.items[*].data}' | sha256sum | cut -c1-16)
+          kustomize edit add annotation --force "officine.fiap/secrets-hash:$SECRETS_HASH"
           kustomize edit set image "execution-service=$IMAGE"
           kustomize build . | kubectl apply -f -
           kubectl -n "$NAMESPACE" rollout status deployment/execution-service --timeout=240s
