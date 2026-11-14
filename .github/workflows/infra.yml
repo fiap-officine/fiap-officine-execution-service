@@ -57,7 +57,15 @@ jobs:
           -backend-config="region=sa-east-1"
       - run: terraform validate
       - name: Plan
-        run: terraform plan -input=false -var-file="env/${ENVIRONMENT}.tfvars" -var="node_role_name=${{ vars.K3S_NODE_ROLE_NAME }}" -out=tfplan
+        env:
+          NODE_ROLE_VAR: ${{ vars.K3S_NODE_ROLE_NAME }}
+        run: |
+          # Role do nó K3s publicada pelo fiap-officine-kubernets (variável como fallback)
+          NODE_ROLE=$(aws ssm get-parameter --name "/fiap-officine/${ENVIRONMENT}/k3s/node-role-name" \
+            --query Parameter.Value --output text 2>/dev/null || true)
+          NODE_ROLE=${NODE_ROLE:-$NODE_ROLE_VAR}
+          terraform plan -input=false -var-file="env/${ENVIRONMENT}.tfvars" \
+            -var="node_role_name=$NODE_ROLE" -out=tfplan
       - name: Apply
         if: github.event_name == 'push'
         run: terraform apply -input=false -auto-approve tfplan

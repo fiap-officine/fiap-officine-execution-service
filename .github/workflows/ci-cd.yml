@@ -15,6 +15,8 @@ env:
   ECR_REPOSITORY: fiap-officine-execution-service
   AWS_REGION: sa-east-1
   NAMESPACE: officine
+  # Parâmetros publicados por fiap-officine-kubernets e fiap-officine-database
+  SSM_PREFIX: /fiap-officine/homolog
 
 jobs:
   # ── 1. Lint + testes (unit, integração, BDD) com cobertura mínima de 80% ──
@@ -88,15 +90,26 @@ jobs:
       IMAGE: ${{ needs.build-push.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
       - uses: azure/setup-kubectl@v4
       - uses: imranismail/setup-kustomize@v2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Kubeconfig
+      - name: Kubeconfig (publicado pelo nó K3s no SSM; fallback no secret KUBE_CONFIG_DATA)
         env:
-          KUBE_CONFIG_RAW: ${{ secrets.KUBE_CONFIG_DATA }}
-        run: pip install pyyaml >/dev/null && python scripts/setup_kubeconfig.py
+          KUBE_CONFIG_SECRET: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          KUBE_CONFIG_RAW=$(aws ssm get-parameter --name "$SSM_PREFIX/k3s/kubeconfig" \
+            --with-decryption --query Parameter.Value --output text 2>/dev/null || true)
+          export KUBE_CONFIG_RAW="${KUBE_CONFIG_RAW:-$KUBE_CONFIG_SECRET}"
+          pip install pyyaml >/dev/null && python scripts/setup_kubeconfig.py
+          kubectl cluster-info
 
       - name: Segredos (gerados a partir de GitHub Secrets; nunca versionados)
         env:
@@ -112,6 +125,15 @@ jobs:
               --from-literal=license_key="$NEW_RELIC_LICENSE_KEY" \
               --dry-run=client -o yaml | kubectl apply -f -
           fi
+
+      - name: Credencial do ECR para o K3s (imagePullSecret renovado a cada deploy)
+        run: |
+          kubectl -n "$NAMESPACE" create secret docker-registry ecr-pull \
+            --docker-server="${IMAGE%%/*}" --docker-username=AWS \
+            --docker-password="$(aws ecr get-login-password --region "$AWS_REGION")" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "$NAMESPACE" patch serviceaccount default \
+            -p '{"imagePullSecrets":[{"name":"ecr-pull"}]}'
 
       - name: Deploy (Kustomize) + rollout
         run: |
