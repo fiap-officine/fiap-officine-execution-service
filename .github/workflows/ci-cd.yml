@@ -1,0 +1,158 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main, develop]
+  # Deploy só a partir de develop: a main recebe PRs de develop (marco de
+  # versão). O SonarCloud Free analisa os PRs e um único branch (develop).
+  push:
+    branches: [develop]
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SERVICE: execution-service
+  ECR_REPOSITORY: fiap-officine-execution-service
+  AWS_REGION: us-east-2
+  NAMESPACE: officine
+  # Parâmetros publicados por fiap-officine-kubernets e fiap-officine-database
+  SSM_PREFIX: /fiap-officine/homolog
+
+jobs:
+  # ── 1. Lint + testes (unit, integração, BDD) com cobertura mínima de 80% ──
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --no-build
+      - name: Lint
+        run: uv run --frozen --no-build ruff check . && uv run --frozen --no-build ruff format --check .
+      - name: Testes + cobertura (gate 80%)
+        run: uv run --frozen --no-build pytest --cov-fail-under=80
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  # ── 2. SonarCloud + Quality Gate (check obrigatório no PR) ──
+  quality:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@2f77a1ec69fb1d595b06f35ab27e97605bdef703 # v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+
+  # ── 3. Build e push da imagem no ECR (tag = SHA do commit) ──
+  build-push:
+    if: github.event_name == 'push'
+    needs: quality
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+      - id: meta
+        run: echo "image=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Build & push
+        run: |
+          docker build -t "${{ steps.meta.outputs.image }}" .
+          docker push "${{ steps.meta.outputs.image }}"
+
+  # ── 4. Deploy no Kubernetes (ambiente único: homolog, a partir de develop) ──
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: homolog
+    env:
+      OVERLAY: homolog
+      IMAGE: ${{ needs.build-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+      - uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2
+      - name: Kubeconfig (publicado pelo nó K3s no SSM; fallback no secret KUBE_CONFIG_DATA)
+        env:
+          KUBE_CONFIG_SECRET: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          CONTENT=$(aws ssm get-parameter --name "$SSM_PREFIX/k3s/kubeconfig" \
+            --with-decryption --query Parameter.Value --output text 2>/dev/null || true)
+          CONTENT="${CONTENT:-$KUBE_CONFIG_SECRET}"
+          # Aceita YAML puro (SSM) ou base64 (secret)
+          if ! printf '%s' "$CONTENT" | grep -q "apiVersion"; then
+            CONTENT=$(printf '%s' "$CONTENT" | base64 -d)
+          fi
+          mkdir -p ~/.kube
+          printf '%s\n' "$CONTENT" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl cluster-info
+
+      - name: Segredos (gerados a partir de GitHub Secrets; nunca versionados)
+        env:
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          kubectl apply -f k8s/base/namespace.yaml
+          kubectl -n "$NAMESPACE" create secret generic execution-service-secrets \
+            --from-literal=JWT_SECRET_KEY="$JWT_SECRET_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          if [ -n "$NEW_RELIC_LICENSE_KEY" ]; then
+            kubectl -n "$NAMESPACE" create secret generic newrelic-secret \
+              --from-literal=license_key="$NEW_RELIC_LICENSE_KEY" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+
+      - name: Credencial do ECR para o K3s (imagePullSecret renovado a cada deploy)
+        run: |
+          REGISTRY="${IMAGE%%/*}"
+          AUTH=$(printf 'AWS:%s' "$(aws ecr get-login-password --region "$AWS_REGION")" | base64 -w0)
+          printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY" "$AUTH" > "$RUNNER_TEMP/dockerconfig.json"
+          kubectl -n "$NAMESPACE" create secret generic ecr-pull \
+            --type=kubernetes.io/dockerconfigjson \
+            --from-file=.dockerconfigjson="$RUNNER_TEMP/dockerconfig.json" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$RUNNER_TEMP/dockerconfig.json"
+          kubectl -n "$NAMESPACE" patch serviceaccount default \
+            -p '{"imagePullSecrets":[{"name":"ecr-pull"}]}'
+
+      - name: Deploy (Kustomize) + rollout
+        run: |
+          cd "k8s/overlays/$OVERLAY"
+          kustomize edit set image "execution-service=$IMAGE"
+          kustomize build . | kubectl apply -f -
+          kubectl -n "$NAMESPACE" rollout status deployment/execution-service --timeout=240s
+
+      - name: Smoke test
+        run: |
+          kubectl -n "$NAMESPACE" run "smoke-execution-${GITHUB_RUN_ID}" --rm -i --restart=Never \
+            --image=curlimages/curl:8.10.1 -- \
+            curl -fsS --retry 5 --retry-delay 3 http://execution-service:8000/execution/health

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fiap-officine/contracts/envelope.schema.json",
+  "title": "Envelope de mensagem da saga (v1)",
+  "type": "object",
+  "required": ["message_id", "type", "kind", "occurred_at", "source", "version", "payload"],
+  "properties": {
+    "message_id": { "type": "string", "format": "uuid", "description": "Chave de idempotência" },
+    "type": { "type": "string", "examples": ["GerarOrcamento", "PagamentoConfirmado"] },
+    "kind": { "enum": ["command", "reply", "event"] },
+    "saga_id": { "type": ["string", "null"], "format": "uuid" },
+    "os_id": { "type": ["integer", "null"] },
+    "correlation_id": { "type": ["string", "null"] },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "source": { "enum": ["os-service", "billing-service", "execution-service"] },
+    "version": { "const": 1 },
+    "trace": {
+      "type": "object",
+      "description": "Headers de distributed tracing (New Relic / W3C traceparent, tracestate)",
+      "additionalProperties": { "type": "string" }
+    },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

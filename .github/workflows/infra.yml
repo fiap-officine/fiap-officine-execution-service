@@ -1,0 +1,71 @@
+name: Infra (Terraform)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  push:
+    branches: [develop]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+
+# Sem lock no S3 (Terraform 1.9): serializa as execuções do repositório
+concurrency:
+  group: terraform-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  TF_SERVICE: execution-service
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      ENVIRONMENT: homolog
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.9.5
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-2
+
+      - name: Bucket do state remoto (cria se não existir)
+        id: state
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET="fiap-officine-tfstate-${ACCOUNT_ID}"
+          if ! aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            # Outro serviço pode estar criando ao mesmo tempo: tolera a corrida
+            aws s3api create-bucket --bucket "$BUCKET" --region us-east-2               --create-bucket-configuration LocationConstraint=us-east-2               || aws s3api head-bucket --bucket "$BUCKET"
+            aws s3api put-bucket-versioning --bucket "$BUCKET"               --versioning-configuration Status=Enabled
+            aws s3api put-public-access-block --bucket "$BUCKET"               --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          fi
+          echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
+
+      - run: terraform fmt -check -recursive
+      - run: >-
+          terraform init -input=false
+          -backend-config="bucket=${{ steps.state.outputs.bucket }}"
+          -backend-config="key=${TF_SERVICE}/${ENVIRONMENT}/terraform.tfstate"
+          -backend-config="region=us-east-2"
+      - run: terraform validate
+      - name: Plan
+        env:
+          NODE_ROLE_VAR: ${{ vars.K3S_NODE_ROLE_NAME }}
+        run: |
+          # Role do nó K3s publicada pelo fiap-officine-kubernets (variável como fallback)
+          NODE_ROLE=$(aws ssm get-parameter --name "/fiap-officine/${ENVIRONMENT}/k3s/node-role-name" \
+            --query Parameter.Value --output text 2>/dev/null || true)
+          NODE_ROLE=${NODE_ROLE:-$NODE_ROLE_VAR}
+          terraform plan -input=false -var-file="env/${ENVIRONMENT}.tfvars" \
+            -var="node_role_name=$NODE_ROLE" -out=tfplan
+      - name: Apply
+        if: github.event_name == 'push'
+        run: terraform apply -input=false -auto-approve tfplan

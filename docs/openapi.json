@@ -1,0 +1,600 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Oficina Mecânica - Execution Service",
+    "description": "Estoque de peças, fila de execução, diagnóstico e reparo (**DynamoDB**). Participante da saga: reserva de peças com `TransactWriteItems` condicional e liberação como compensação.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/execution/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Healthcheck do Execution Service",
+        "operationId": "get_health_execution_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/fila": {
+      "get": {
+        "tags": [
+          "Execução (fila e mecânico)"
+        ],
+        "summary": "Fila De Execucao",
+        "description": "Fila ordenada por prioridade e ordem de chegada (GSI `fila-por-status`).",
+        "operationId": "fila_de_execucao_api_v1_execucoes_fila_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "aguardando_execucao",
+                "em_diagnostico",
+                "em_execucao"
+              ],
+              "type": "string",
+              "default": "aguardando_execucao",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Fila De Execucao Api V1 Execucoes Fila Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/{os_id}": {
+      "get": {
+        "tags": [
+          "Execução (fila e mecânico)"
+        ],
+        "summary": "Detalhar Execucao",
+        "description": "Estado atual e linha do tempo da execução da OS.",
+        "operationId": "detalhar_execucao_api_v1_execucoes__os_id__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "os_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Os Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Detalhar Execucao Api V1 Execucoes  Os Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/{os_id}/iniciar-diagnostico": {
+      "post": {
+        "tags": [
+          "Execução (fila e mecânico)"
+        ],
+        "summary": "Iniciar Diagnostico",
+        "description": "aguardando_execucao -> em_diagnostico (publica `DiagnosticoIniciado`).",
+        "operationId": "iniciar_diagnostico_api_v1_execucoes__os_id__iniciar_diagnostico_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "os_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Os Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AcaoRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Dados"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Iniciar Diagnostico Api V1 Execucoes  Os Id  Iniciar Diagnostico Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/{os_id}/iniciar-reparo": {
+      "post": {
+        "tags": [
+          "Execução (fila e mecânico)"
+        ],
+        "summary": "Iniciar Reparo",
+        "description": "em_diagnostico -> em_execucao (publica `ReparoIniciado`). **Pivô da saga**:\na partir daqui a OS não pode mais ser compensada.",
+        "operationId": "iniciar_reparo_api_v1_execucoes__os_id__iniciar_reparo_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "os_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Os Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AcaoRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Dados"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Iniciar Reparo Api V1 Execucoes  Os Id  Iniciar Reparo Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/{os_id}/finalizar": {
+      "post": {
+        "tags": [
+          "Execução (fila e mecânico)"
+        ],
+        "summary": "Finalizar",
+        "description": "em_execucao -> finalizada: baixa definitiva das peças reservadas, alerta de\nestoque mínimo e `ExecucaoFinalizada` para a saga.",
+        "operationId": "finalizar_api_v1_execucoes__os_id__finalizar_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "os_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Os Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AcaoRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Dados"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Finalizar Api V1 Execucoes  Os Id  Finalizar Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/estoque/": {
+      "get": {
+        "tags": [
+          "Estoque de peças"
+        ],
+        "summary": "Listar Estoque",
+        "operationId": "listar_estoque_api_v1_estoque__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Listar Estoque Api V1 Estoque  Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/estoque/{peca_id}": {
+      "get": {
+        "tags": [
+          "Estoque de peças"
+        ],
+        "summary": "Buscar Estoque",
+        "operationId": "buscar_estoque_api_v1_estoque__peca_id__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "peca_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Peca Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Buscar Estoque Api V1 Estoque  Peca Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Estoque de peças"
+        ],
+        "summary": "Registrar Entrada",
+        "description": "Entrada de estoque (soma ao disponível) e ajuste do estoque mínimo.\nO `peca_id` é o mesmo do catálogo do OS Service.",
+        "operationId": "registrar_entrada_api_v1_estoque__peca_id__put",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "peca_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Peca Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntradaEstoqueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Registrar Entrada Api V1 Estoque  Peca Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AcaoRequest": {
+        "properties": {
+          "observacao": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observacao"
+          }
+        },
+        "type": "object",
+        "title": "AcaoRequest"
+      },
+      "EntradaEstoqueRequest": {
+        "properties": {
+          "quantidade_entrada": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Quantidade Entrada"
+          },
+          "estoque_minimo": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estoque Minimo"
+          },
+          "nome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nome"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quantidade_entrada"
+        ],
+        "title": "EntradaEstoqueRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "/api/v1/auth/login"
+          }
+        }
+      }
+    }
+  }
+}
