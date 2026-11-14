@@ -53,3 +53,8 @@ packages = ["app"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# Aplicação (não biblioteca): o uv instala só as dependências, sem build do
+# projeto, o que permite --no-build (nenhum script de setup é executado)
+package = false

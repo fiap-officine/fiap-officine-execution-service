@@ -524,7 +524,7 @@ wheels = [
 [[package]]
 name = "fiap-officine-execution-service"
 version = "1.0.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "boto3" },
     { name = "fastapi" },

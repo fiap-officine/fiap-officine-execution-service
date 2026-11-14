@@ -23,6 +23,8 @@ spec:
         app: execution-service
         app.kubernetes.io/name: execution-service
     spec:
+      # A aplicação não usa a API do Kubernetes: sem token montado
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       containers:
         # API + consumer de execution-commands + outbox relay (DynamoDB -> SQS)

@@ -23,18 +23,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
       - name: Lint
-        run: uv run ruff check . && uv run ruff format --check .
+        run: uv run --frozen --no-build ruff check . && uv run --frozen --no-build ruff format --check .
       - name: Testes + cobertura (gate 80%)
-        run: uv run pytest --cov-fail-under=80
-      - uses: actions/upload-artifact@v4
+        run: uv run --frozen --no-build pytest --cov-fail-under=80
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
           path: coverage.xml
@@ -44,14 +44,14 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: coverage
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@2f77a1ec69fb1d595b06f35ab27e97605bdef703 # v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
@@ -64,15 +64,15 @@ jobs:
     outputs:
       image: ${{ steps.meta.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
       - id: meta
         run: echo "image=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Build & push
@@ -89,26 +89,29 @@ jobs:
       OVERLAY: homolog
       IMAGE: ${{ needs.build-push.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-      - uses: azure/setup-kubectl@v4
-      - uses: imranismail/setup-kustomize@v2
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+      - uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2
       - name: Kubeconfig (publicado pelo nó K3s no SSM; fallback no secret KUBE_CONFIG_DATA)
         env:
           KUBE_CONFIG_SECRET: ${{ secrets.KUBE_CONFIG_DATA }}
         run: |
-          KUBE_CONFIG_RAW=$(aws ssm get-parameter --name "$SSM_PREFIX/k3s/kubeconfig" \
+          CONTENT=$(aws ssm get-parameter --name "$SSM_PREFIX/k3s/kubeconfig" \
             --with-decryption --query Parameter.Value --output text 2>/dev/null || true)
-          export KUBE_CONFIG_RAW="${KUBE_CONFIG_RAW:-$KUBE_CONFIG_SECRET}"
-          pip install pyyaml >/dev/null && python scripts/setup_kubeconfig.py
+          CONTENT="${CONTENT:-$KUBE_CONFIG_SECRET}"
+          # Aceita YAML puro (SSM) ou base64 (secret)
+          if ! printf '%s' "$CONTENT" | grep -q "apiVersion"; then
+            CONTENT=$(printf '%s' "$CONTENT" | base64 -d)
+          fi
+          mkdir -p ~/.kube
+          printf '%s\n' "$CONTENT" > ~/.kube/config
+          chmod 600 ~/.kube/config
           kubectl cluster-info
 
       - name: Segredos (gerados a partir de GitHub Secrets; nunca versionados)
@@ -128,10 +131,14 @@ jobs:
 
       - name: Credencial do ECR para o K3s (imagePullSecret renovado a cada deploy)
         run: |
-          kubectl -n "$NAMESPACE" create secret docker-registry ecr-pull \
-            --docker-server="${IMAGE%%/*}" --docker-username=AWS \
-            --docker-password="$(aws ecr get-login-password --region "$AWS_REGION")" \
+          REGISTRY="${IMAGE%%/*}"
+          AUTH=$(printf 'AWS:%s' "$(aws ecr get-login-password --region "$AWS_REGION")" | base64 -w0)
+          printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY" "$AUTH" > "$RUNNER_TEMP/dockerconfig.json"
+          kubectl -n "$NAMESPACE" create secret generic ecr-pull \
+            --type=kubernetes.io/dockerconfigjson \
+            --from-file=.dockerconfigjson="$RUNNER_TEMP/dockerconfig.json" \
             --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$RUNNER_TEMP/dockerconfig.json"
           kubectl -n "$NAMESPACE" patch serviceaccount default \
             -p '{"imagePullSecrets":[{"name":"ecr-pull"}]}'
 
