@@ -3,8 +3,10 @@ name: CI/CD
 on:
   pull_request:
     branches: [main, develop]
+  # Deploy só a partir de develop: a main recebe PRs de develop (marco de
+  # versão). O SonarCloud Free analisa os PRs e um único branch (develop).
   push:
-    branches: [main, develop]
+    branches: [develop]
 
 concurrency:
   group: ci-cd-${{ github.ref }}
@@ -80,7 +82,7 @@ jobs:
           docker build -t "${{ steps.meta.outputs.image }}" .
           docker push "${{ steps.meta.outputs.image }}"
 
-  # ── 4. Deploy no Kubernetes (ambiente único: homolog, para develop e main) ──
+  # ── 4. Deploy no Kubernetes (ambiente único: homolog, a partir de develop) ──
   deploy:
     needs: build-push
     runs-on: ubuntu-latest

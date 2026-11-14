@@ -5,7 +5,7 @@ on:
     branches: [main, develop]
     paths: ["infra/**", ".github/workflows/infra.yml"]
   push:
-    branches: [main, develop]
+    branches: [develop]
     paths: ["infra/**", ".github/workflows/infra.yml"]
 
 # Sem lock no S3 (Terraform 1.9): serializa as execuções do repositório
