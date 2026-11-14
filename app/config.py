@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "execution-service"
 
     # ── AWS (DynamoDB + SQS) ─────────────────────
-    AWS_REGION: str = "sa-east-1"
+    AWS_REGION: str = "us-east-2"
     AWS_ENDPOINT_URL: str | None = None  # LocalStack em dev
     DYNAMODB_TABLE_PREFIX: str = "fiap-officine"
     # Cria as tabelas na subida (dev/LocalStack). Em AWS, o Terraform cria.

@@ -13,7 +13,7 @@ concurrency:
 env:
   SERVICE: execution-service
   ECR_REPOSITORY: fiap-officine-execution-service
-  AWS_REGION: sa-east-1
+  AWS_REGION: us-east-2
   NAMESPACE: officine
   # Parâmetros publicados por fiap-officine-kubernets e fiap-officine-database
   SSM_PREFIX: /fiap-officine/homolog

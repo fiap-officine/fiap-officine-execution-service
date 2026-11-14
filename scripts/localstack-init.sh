@@ -4,7 +4,7 @@
 set -euo pipefail
 
 PREFIX="${SQS_QUEUE_PREFIX:-fiap-officine}"
-REGION="${AWS_DEFAULT_REGION:-sa-east-1}"
+REGION="${AWS_DEFAULT_REGION:-us-east-2}"
 
 for QUEUE in billing-commands execution-commands os-saga-replies; do
   DLQ_URL=$(awslocal sqs create-queue --region "$REGION" \

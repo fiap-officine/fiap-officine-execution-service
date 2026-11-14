@@ -23,7 +23,7 @@ configMapGenerator:
       - NEW_RELIC_APP_NAME=officine-execution-service
       - NEW_RELIC_DISTRIBUTED_TRACING_ENABLED=true
       - DYNAMODB_CREATE_TABLES=false
-      - AWS_REGION=sa-east-1
+      - AWS_REGION=us-east-2
       - RUN_WORKERS=true
       - LOG_LEVEL=INFO
       - JWT_ALGORITHM=HS256
